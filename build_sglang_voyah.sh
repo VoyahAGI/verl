@@ -48,7 +48,6 @@ docker run -d \
     -it \
     --shm-size 32g \
     --gpus all \
-    --user "$(id -u):$(id -g)" \
     -v "${CACHE_DIR}:/root/.cache/modelscope" \
     -v "${VERL_DIR}:/home/verl" \
     --ipc=host \
@@ -61,11 +60,8 @@ docker run -d \
 # 检查容器是否启动成功
 if [ $? -eq 0 ]; then
     echo "容器 '${CONTAINER_NAME}' 启动成功！"
-    echo "正在为容器内用户配置 Zsh..."
-    docker exec "${CONTAINER_NAME}" /bin/bash -c "echo 'PROMPT=\"%n@%m:%~%# \"' > /home/verl/.zshrc"
-    echo "配置完成！"
     echo "使用以下命令进入容器："
-    echo "docker exec -it -e HOME=/home/verl -w /home/verl ${CONTAINER_NAME} /bin/zsh"
+    echo "docker exec -it ${CONTAINER_NAME} /bin/zsh"
 else
     echo "容器启动失败！"
     exit 1
