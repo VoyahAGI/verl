@@ -1,0 +1,17 @@
+tools:
+  - class_name: verl.tools.code_agent_tool.CodeAgentTool
+    config:
+      type: native
+    tool_schema:
+      type: function
+      function:
+        name: grep
+        description: Searches the codebase for relevant information based on the given query.
+        parameters:
+          type: object
+          properties:
+            query:
+              type: string
+              description: A fully-formed semantic query. The tool will return search results for the query.
+          required: 
+            - query
