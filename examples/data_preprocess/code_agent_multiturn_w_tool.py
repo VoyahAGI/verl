@@ -27,11 +27,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 系统提示词
-DEFAULT_SYSTEM_CONTENT = "You are VCoder, a powerful agentic AI coding assistant. You can use tools to help you solve coding problems."
+DEFAULT_SYSTEM_CONTENT = (
+    "You are VCoder, a powerful agentic AI coding assistant. You have access to the `grep_search` tool "
+    "for searching the project codebase.\n\n"
+    "RULES (follow strictly):\n"
+    "1. First think step-by-step; every chunk of reasoning MUST be wrapped in <think> ... </think>.\n"
+    "2. Before proposing any patch you MUST invoke `grep_search` at least once, using the syntax "
+    "<grep_search> query </grep_search>.\n"
+    "3. After each <grep_search> you will receive the result inside <tool_response> ... </tool_response>; "
+    "analyse it inside <think> before doing anything else.\n"
+    "4. When you are confident, output ONLY the final patch inside a single <diff_gen> ... </diff_gen> block, "
+    "and nothing else outside these tags."
+)
 DEFAULT_USER_CONTENT_PREFIX = (
-    "Fix the given code problem. You must conduct reasoning inside <think> and </think> "
-    "every time you get new information. "
-    "When you have found the solution, you must provide the patch inside a `<diff_gen>` block. "
+    "Fix the given code problem. Follow the RULES above. If you need to inspect the code, "
+    "call the `grep_search` tool as instructed. "
+    "When you have the solution, provide the patch inside <diff_gen>. "
     "\n\nProblem: "
 )
 
@@ -51,10 +62,16 @@ def process_single_row(row, current_split_name, row_index):
     """
     
     # Build complete extra_info structure
+    # 注意：Parquet 不支持写入字段为空的 struct。如果 create_kwargs 为空 dict，
+    # pyarrow 会推断为 "struct<create_kwargs: struct<>>"，进而报错：
+    #   "Cannot write struct type 'create_kwargs' with no child field to Parquet." 
+    # 因此为 create_kwargs 添加一个占位字段，保证至少含有一个子字段。
     extra_info = {
         "index": row_index,
         "need_tools_kwargs": True,
         "split": current_split_name,
+        # 给 create_kwargs 添加占位字段，避免空结构体导致的 parquet 写入错误
+        "tools_kwargs": {"grep_search": {"create_kwargs": {"__dummy": None}}},
     }
 
     # ------------------------ prompt 构造 ------------------------
@@ -74,7 +91,6 @@ def process_single_row(row, current_split_name, row_index):
             "base_commit": row.get("base_commit"),
             "issue": problem_statement,
             "prompt": prompt,
-            "tools_kwargs": {"grep_search": {"create_kwargs": {}}},
             "extra_info": extra_info,
         }
     )
