@@ -16,11 +16,9 @@
 import argparse
 import logging
 import os
-import tempfile
 
 import pandas as pd
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
+from datasets import load_dataset
 
 from verl.utils.hdfs_io import copy, makedirs
 
@@ -29,23 +27,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # 系统提示词
-DEFAULT_SYSTEM_CONTENT = "You are VCoder, a powerful agentic  AI coding assistant."
+DEFAULT_SYSTEM_CONTENT = "You are VCoder, a powerful agentic AI coding assistant. You can use tools to help you solve coding problems."
 DEFAULT_USER_CONTENT_PREFIX = (
-    "Answer the given question. You must conduct reasoning inside <think> and </think> "
-    "first every time you get new information. After reasoning, if you find you lack "
-    "some knowledge, you can call a search engine by <tool_call> query </tool_call> "
-    "and it will return the top searched results between <tool_response> and "
-    "</tool_response>. You can search as many times as your want. If you find no "
-    "further external knowledge needed, you can directly provide the answer inside "
-    "<answer> and </answer>, without detailed illustrations. For example, "
-    "<answer> Beijing </answer>. Question: "
+    "Fix the given code problem. You must conduct reasoning inside <think> and </think> "
+    "every time you get new information. "
+    "When you have found the solution, you must provide the patch inside a `<diff_gen>` block. "
+    "\n\nProblem: "
 )
 
 # 提取数据
 # 处理SWE-Bench Lite数据集，得到训练用数据，包含repo， commit_id, issue
 def process_single_row(row, current_split_name, row_index):
     """
-    Process a single row of data for SearchR1-like format.
+    Process a single row of data for SWE-Bench Lite format.
 
     Args:
         row: DataFrame row containing the original data
@@ -63,12 +57,24 @@ def process_single_row(row, current_split_name, row_index):
         "split": current_split_name,
     }
 
+    # ------------------------ prompt 构造 ------------------------
+    problem_statement = row.get("problem_statement", "")
+    user_content = DEFAULT_USER_CONTENT_PREFIX + problem_statement
+
+    prompt = [
+        {"role": "system", "content": DEFAULT_SYSTEM_CONTENT},
+        {"role": "user", "content": user_content},
+    ]
+
     return pd.Series(
         {
+            "data_source": "swe_bench_lite",
             "repo": row.get("repo"),
             "instance_id": row.get("instance_id"),
-            "base_commit": row.get("commit_id"),
-            "issue": row.get("problem_statement"),
+            "base_commit": row.get("base_commit"),
+            "issue": problem_statement,
+            "prompt": prompt,
+            "tools_kwargs": {"grep_search": {"create_kwargs": {}}},
             "extra_info": extra_info,
         }
     )
@@ -79,42 +85,34 @@ def main():
 
     processed_files = []
 
-    # Download and process files using temporary directory
-    with tempfile.TemporaryDirectory() as tmp_download_dir:
-        for split in ["dev", "test"]:
-            parquet_filename = f"{split}.parquet"
-            logger.info(f"Processing {split} split...")
+    # Load dataset using datasets library
+    try:
+        logger.info(f"Loading dataset {args.hf_repo_id}")
+        dataset = load_dataset(args.hf_repo_id)
+        
+        # Process available splits
+        for split_name in dataset.keys():
+            if split_name in ["dev", "test"]:  # Only process dev and test splits
+                logger.info(f"Processing {split_name} split...")
+                
+                # Convert to DataFrame
+                df_raw = dataset[split_name].to_pandas()
+                logger.info(f"Loaded {len(df_raw)} rows from {split_name} split")
 
-            try:
-                # Download Parquet file from HuggingFace
-                logger.info(f"Downloading {parquet_filename} from {args.hf_repo_id}")
-                local_parquet_filepath = hf_hub_download(
-                    repo_id=args.hf_repo_id,
-                    filename=parquet_filename,
-                    repo_type="dataset",
-                    local_dir=tmp_download_dir,
-                    local_dir_use_symlinks=False,
-                )
-
-                # Load and process Parquet file
-                df_raw = pd.read_parquet(local_parquet_filepath)
-                logger.info(f"Loaded {len(df_raw)} rows from {parquet_filename}")
-
-                def apply_process_row(row, split_name=split):
+                def apply_process_row(row, split_name=split_name):
                     return process_single_row(row, current_split_name=split_name, row_index=row.name)
 
                 df_processed = df_raw.apply(apply_process_row, axis=1)
 
                 # Save processed DataFrame
-                output_file_path = os.path.join(local_save_dir, f"{split}.parquet")
+                output_file_path = os.path.join(local_save_dir, f"{split_name}.parquet")
                 df_processed.to_parquet(output_file_path, index=False)
                 logger.info(f"Saved {len(df_processed)} processed rows to {output_file_path}")
                 processed_files.append(output_file_path)
 
-            except EntryNotFoundError:
-                logger.warning(f"{parquet_filename} not found in repository {args.hf_repo_id}")
-            except Exception as e:
-                logger.error(f"Error processing {split} split: {e}")
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        return
 
     if not processed_files:
         logger.warning("No data was processed or saved")

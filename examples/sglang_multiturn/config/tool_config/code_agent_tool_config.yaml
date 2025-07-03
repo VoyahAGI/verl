@@ -1,11 +1,13 @@
 tools:
-  - class_name: verl.tools.code_agent_tool.CodeAgentTool
+  - class_name: "verl.tools.grep_search_tool.GrepSearchTool"
     config:
       type: native
+      search_root: "."
+      max_lines: 50
     tool_schema:
       type: function
       function:
-        name: grep
+        name: grep_search
         description: Searches the codebase for relevant information based on the given query.
         parameters:
           type: object
